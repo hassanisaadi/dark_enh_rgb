@@ -140,3 +140,23 @@ def tf_psnr(im1, im2):
     mse = tf.losses.mean_squared_error(labels=im2 * 255.0, predictions=im1 * 255.0)
     return 10.0 * (tf.log(255.0 ** 2 / mse) / tf.log(10.0))
 
+def tf_ycrcb2rgb(x):
+    # assert x values are in [0, 255]
+    n = tf.shape(x)[0]
+    h = tf.shape(x)[1]
+    w = tf.shape(x)[2]
+    c = tf.shape(x)[3]
+    xform = tf.constant([[1, 0, 1.402], [1, -0.34414, -0.71414], [1, 1.772, 0]], dtype=tf.float32)
+    #c128 = tf.constant(-128*np.ones((n,h,w,c)), dtype=tf.float32)
+    y, cr, cb = tf.split(x, 3, 3)
+    cr = tf.add(cr, -128)
+    cb = tf.add(cb, -128)
+    rgb = tf.concat([y, cr, cb],3)
+    xformT = tf.transpose(xform)
+    rgb = tf.reshape(rgb, shape=[n*h*w,c])
+    rgb = tf.matmul(rgb, xformT)
+    rgb = tf.reshape(rgb, shape=[n,h,w,c])
+    rgb = tf.clip_by_value(rgb, 0, 255)
+    return rgb
+
+

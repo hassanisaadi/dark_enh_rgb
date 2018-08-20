@@ -1,6 +1,7 @@
 import time
 from utils import *
 import random
+#from My_Vgg16 import *
 
 def resBlock(x, p1, p2, name, is_training):
     # p1["fs"]: feature map size
@@ -14,8 +15,7 @@ def resBlock(x, p1, p2, name, is_training):
         y = tf.add(r,x)
         return y
 
-def dualenh_lum(x_lum0, x_lum, is_training, L=32):
-    fm = 64
+def dualenh_lum(x_lum0, x_lum, is_training, L=32, fm=64):
     xx  = tf.concat([x_lum0, x_lum], 3)
     res = tf.layers.conv2d(xx, fm, 3, padding='same', name='lum_conv_start', activation=None)
     res = tf.nn.leaky_relu(res, alpha=0.2, name='lum_lrelu_start')
@@ -33,8 +33,7 @@ def dualenh_lum(x_lum0, x_lum, is_training, L=32):
 
     return y
 
-def enh_chr(y_hat_lum, x_chr, is_training, L=32):
-    fm = 64
+def enh_chr(y_hat_lum, x_chr, is_training, L=32, fm=64):
     y = tf.concat([y_hat_lum, x_chr], 3)
     y = tf.layers.conv2d(y, fm, 3, padding='same', name='chr_conv_start', activation=None)
     y = tf.nn.leaky_relu(y, alpha=0.2, name='chr_lrelu_start')
@@ -52,8 +51,7 @@ def enh_chr(y_hat_lum, x_chr, is_training, L=32):
 
     return y
 
-def singleenh_lum(x_lum0, is_training, L=32):
-    fm = 64
+def singleenh_lum(x_lum0, is_training, L=32, fm=64):
     res = tf.layers.conv2d(x_lum0, fm, 3, padding='same', name='lum_conv_start', activation=None)
     res = tf.nn.leaky_relu(res, alpha=0.2, name='lum_relu_start')
 
@@ -71,10 +69,12 @@ def singleenh_lum(x_lum0, is_training, L=32):
     return y
 
 class imdualenh(object):
-    def __init__(self, sess, batch_size=128, PARALLAX=64, model="dual", logfile="./logs/log.txt", lmbd=0.6):
+    def __init__(self, sess, batch_size=128, PARALLAX=64, model="dual", logfile="./logs/log.txt", 
+                 lmbd1=0.33, lmbd2=0.33, lmbd3=0.33, L=32, fm=64):
         self.sess = sess
         self.parallax = PARALLAX
         self.logfile = open(logfile, "w")
+        assert lmbd1 + lmbd2 + lmbd3 <= 1
 
         # Labels
         self.Y_LUM_   = tf.placeholder(tf.float32, [None, None, None, 1], name='Y_GT_LUM')
@@ -87,32 +87,39 @@ class imdualenh(object):
 
         self.is_training = tf.placeholder(tf.bool, name='is_training')
 
-        L = 32
         if model == "dual":
-	    self.Y_LUM = dualenh_lum(self.X_lum0, self.X_lum, self.is_training, L)
-            self.Y_YCRCB = enh_chr(self.Y_LUM, self.X_chr, self.is_training, L)
+	    self.Y_LUM = dualenh_lum(self.X_lum0, self.X_lum, self.is_training, L, fm)
+            self.Y_YCRCB = enh_chr(self.Y_LUM, self.X_chr, self.is_training, L, fm)
 	elif model == "single":
-	    self.Y_LUM = singleenh_lum(self.X_lum0, self.is_training, L)
-            self.Y_YCRCB = enh_chr(self.Y_LUM, self.X_chr, self.is_training, L)
+	    self.Y_LUM = singleenh_lum(self.X_lum0, self.is_training, L, fm)
+            self.Y_YCRCB = enh_chr(self.Y_LUM, self.X_chr, self.is_training, L, fm)
 	else:
 	    print("Not recognized the model.")
             self.logfile.write("Not recognized the model.\n")
-	    sys.exit(1)		
+	    sys.exit(1)
+
+        ### VGG16 ###
+        vgg_path = './vgg16_weights.npz'
+        vgg = My_Vgg16(vgg_path)
+        with tf.name_scope('vgg'):
+            self.VGG_f_, self.VGG_f = vgg.build(self.Y_YCRCB_, self.Y_YCRCB)
 
         tf.summary.image('Y_HAT_LUM'  , self.Y_LUM , 1)
         tf.summary.image('Y_GT_LUM'   , self.Y_LUM_, 1)
         tf.summary.image('X_LUM_LEFT' , self.X_lum0, 1)
-        tf.summary.image('Y_HAT_YCrCbr', self.Y_YCRCB, 1)
+        tf.summary.image('Y_HAT_YCrCb', self.Y_YCRCB, 1)
+        tf.summary.image('Y_GT_YCrCb' , self.Y_YCRCB_, 1)
         
-        self.loss_lum = (1.0 / batch_size) * tf.nn.l2_loss(self.Y_LUM_ - self.Y_LUM)
+        self.loss_lum   = (1.0 / batch_size) * tf.nn.l2_loss(self.Y_LUM_ - self.Y_LUM)
         self.loss_ycrcb = (1.0 / batch_size) * tf.nn.l2_loss(self.Y_YCRCB_ - self.Y_YCRCB)
+        self.loss_vgg   = (1.0 / batch_size) * tf.nn.l2_loss(self.VGG_f_ - self.VGG_f)
         self.lr = tf.placeholder(tf.float32, name='learning_rate')
         self.eva_psnr_lum = tf_psnr(self.Y_LUM, self.Y_LUM_)
         self.eva_psnr_ycrcb = tf_psnr(self.Y_YCRCB, self.Y_YCRCB_)
         optimizer = tf.train.AdamOptimizer(self.lr, name='AdamOptimizer')
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
-            self.train_op = optimizer.minimize(self.loss_lum + lmbd * self.loss_ycrcb)
+            self.train_op = optimizer.minimize(lmbd1 * self.loss_lum + lmbd2 * self.loss_ycrcb + lmbd3 * self.loss_vgg)
         init = tf.global_variables_initializer()
         self.sess.run(init)
         print("[*] Initialize model successfully...")
@@ -212,6 +219,7 @@ class imdualenh(object):
         # make summary
         tf.summary.scalar('loss_lum', self.loss_lum)
         tf.summary.scalar('loss_ycrcb', self.loss_ycrcb)
+        tf.summary.scalar('loss_vgg', self.loss_vgg)
         tf.summary.scalar('lr'  , self.lr)
         writer = tf.summary.FileWriter(log_dir, self.sess.graph)
         merged = tf.summary.merge_all()
@@ -320,3 +328,117 @@ class imdualenh(object):
 #        avg_psnr = psnr_sum / len(test_files)
 #        print("--- Average PSNR %.2f ---" % avg_psnr)
 #        sys.stdout.flush()
+
+
+
+VGG_MEAN = [103.939, 116.779, 123.68]
+
+
+class My_Vgg16:
+    def __init__(self, vgg16_npy_path=None):
+        if vgg16_npy_path is None:
+            path = sys.modules[self.__class__.__module__].__file__
+            # print path
+            path = os.path.abspath(os.path.join(path, os.pardir))
+            # print path
+            path = os.path.join(path, "vgg16.npy")
+            print(path)
+            vgg16_npy_path = path
+
+        #self.data_dict = np.load(vgg16_npy_path, encoding='latin1').item()
+        self.data_dict = np.load(vgg16_npy_path, encoding='latin1')
+
+        #weights = np.load(vgg16_npy_path)
+        #keys = sorted(weights.keys())
+        #for i, k in enumerate(keys):
+        #    print i, k, np.shape(weights[k])
+        #    #sess.run(self.parameters[i].assign(weights[k]))
+
+        #sys.exit()
+        #print("npy file loaded")
+
+
+
+
+    def _max_pool(self, bottom, name):
+        return tf.nn.max_pool(bottom, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1],
+                              padding='SAME', name=name)
+
+
+    def _conv_layer(self, bottom, name):
+        with tf.variable_scope(name) as scope:
+            filt = self.get_conv_filter(name)
+            conv = tf.nn.conv2d(bottom, filt, [1, 1, 1, 1], padding='SAME')
+
+            conv_biases = self.get_bias(name)
+            bias = tf.nn.bias_add(conv, conv_biases)
+
+            relu = tf.nn.relu(bias)
+            return relu
+
+
+    def get_conv_filter(self, name):
+        #return tf.Variable(self.data_dict[name+'_W'], name="filter")
+        return tf.constant(self.data_dict[name+'_W'], name="filter")
+        # use tf.constant() to prevent retraining it accidentally
+
+
+    def get_bias(self, name):
+        #return tf.Variable(self.data_dict[name+'_b'], name="biases")
+        return tf.constant(self.data_dict[name+'_b'], name="biases")
+        # use tf.constant() to prevent retraining it accidentally
+        
+    
+    def build(self, y_crcb1, y_crcb2):#, train=False):
+        y_crcb = tf.concat([y_crcb1, y_crcb2], 0)
+
+        #rgb_scaled = rgb * 255.0
+        ycrcb_n = tf.scalar_mul(127.5, y_crcb + 1)
+
+        rgb = tf_ycrcb2rgb(ycrcb_n)
+
+        #rgb_scaled = tf.image.resize_images(rgb, [224, 224])
+        rgb_scaled = rgb
+
+        # Convert RGB to BGR
+        red, green, blue = tf.split(rgb_scaled, 3, 3)
+        #assert red.get_shape().as_list()[1:3] == [224, 224]
+        #assert green.get_shape().as_list()[1:3] == [224, 224]
+        #assert blue.get_shape().as_list()[1:3] == [224, 224]
+        bgr = tf.concat([
+            blue - VGG_MEAN[0],
+            green - VGG_MEAN[1],
+            red - VGG_MEAN[2],
+        ], 3)
+
+        #assert bgr.get_shape().as_list()[1:3] == [224, 224]
+
+        conv1_1 = self._conv_layer(bgr, "conv1_1")
+        conv1_2 = self._conv_layer(conv1_1, "conv1_2")
+        pool1 = self._max_pool(conv1_2, 'pool1')
+
+        conv2_1 = self._conv_layer(pool1, "conv2_1")
+        conv2_2 = self._conv_layer(conv2_1, "conv2_2")
+        pool2 = self._max_pool(conv2_2, 'pool2')
+
+        conv3_1 = self._conv_layer(pool2, "conv3_1")
+        conv3_2 = self._conv_layer(conv3_1, "conv3_2")
+        conv3_3 = self._conv_layer(conv3_2, "conv3_3")
+        pool3 = self._max_pool(conv3_3, 'pool3')
+
+        conv4_1 = self._conv_layer(pool3, "conv4_1")
+        conv4_2 = self._conv_layer(conv4_1, "conv4_2")
+        conv4_3 = self._conv_layer(conv4_2, "conv4_3")
+        pool4 = self._max_pool(conv4_3, 'pool4')
+
+        conv5_1 = self._conv_layer(pool4, "conv5_1")
+        conv5_2 = self._conv_layer(conv5_1, "conv5_2")
+        conv5_3 = self._conv_layer(conv5_2, "conv5_3")
+        pool5 = self._max_pool(conv5_3, 'pool5')
+        
+        #shape_pool5 = pool5.get_shape().as_list()[1:]
+        #assert 'pool5', shape_pool5 == [7, 7, 512]
+        
+        f1, f2 = tf.split(pool5, 2, 0)
+        return f1, f2
+        

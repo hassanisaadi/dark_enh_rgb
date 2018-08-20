@@ -14,9 +14,13 @@ parser = argparse.ArgumentParser(description='')
 parser.add_argument('--epoch',          dest='epoch',       type=int,   default=50,     help='# of epoch')
 parser.add_argument('--batch_size',     dest='batch_size',  type=int,   default=128,    help='# images in batch')
 parser.add_argument('--lr',             dest='lr',          type=float, default=0.001,  help='initial learning rate for adam')
-parser.add_argument('--use_gpu',        dest='use_gpu',     type=int,   default=0,      help='gpu flag, 1 for GPU and 0 for CPU')
 parser.add_argument('--nPatchNum',      dest='PARALLAX',    type=int,   default=65 ,    help='# of neighbor patches in right image')
 parser.add_argument('--gpuid',          dest='gpuid',       type=int,   default=1,      help='GPU id: 0/1')
+parser.add_argument('--lmbd_lum',       dest='lmbd_lum',    type=float, default=0.33,   help='Lambda for luminance loss')
+parser.add_argument('--lmbd_ycrcb',     dest='lmbd_ycrcb',  type=float, default=0.33,   help='Lambda for Y, Cr, Cb loss')
+parser.add_argument('--lmbd_vgg',       dest='lmbd_vgg',    type=float, default=0.33,   help='Lambda for VGG loss')
+parser.add_argument('--num_layers',     dest='num_layers',  type=int,   default=32,     help='Number of layers in lum, chr networks')
+parser.add_argument('--feature_map',    dest='feature_map', type=int,   default=64,     help='Feature map size in conv2d layers')
 parser.add_argument('--eval_every_ep',  dest='eval_vryep',  type=int,                   help='evaluation every epoch.')
 parser.add_argument('--phase',          dest='phase',       default='train',            help='train or test')
 parser.add_argument('--checkpoint_dir', dest='ckpt_dir',    default='./checkpoint',     help='models are saved here')
@@ -68,32 +72,20 @@ def main(_):
     lr = args.lr * np.ones([args.epoch])
     lr[5:] = lr[0] / 10.0   ###!!!
     lr[9:] = lr[0] / 100.0
-    if args.use_gpu:
-        # added to control the gpu memory
-        print("GPU\n")
-        sys.stdout.flush()
-        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.9)
-        with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
-            model = imdualenh(sess, batch_size=args.batch_size, PARALLAX=args.PARALLAX, model=args.model, logfile=args.logfile_path)
-            if args.phase == 'train':
-                model_train(model, lr=lr)
-            elif args.phase == 'test':
-                model_test(model)
-            else:
-                print('[!]Unknown phase')
-                exit(0)
-    else:
-        print("CPU\n")
-        sys.stdout.flush()
-        with tf.Session() as sess:
-            model = imdualenh(sess, batch_size=args.batch_size, PARALLAX=args.PARALLAX, model=args.model, logfile=args.logfile_path)
-            if args.phase == 'train':
-                model_train(model, lr=lr)
-            elif args.phase == 'test':
-                model_test(model)
-            else:
-                print('[!]Unknown phase')
-                exit(0)
-
+    # added to control the gpu memory
+    print("GPU\n")
+    sys.stdout.flush()
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.9)
+    with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+        model = imdualenh(sess, batch_size=args.batch_size, PARALLAX=args.PARALLAX, model=args.model, logfile=args.logfile_path,
+                          lmbd1=args.lmbd_lum, lmbd2=args.lmbd_ycrcb, lmbd3=args.lmbd_vgg,
+                          L=args.num_layers, fm=args.feature_map)
+        if args.phase == 'train':
+            model_train(model, lr=lr)
+        elif args.phase == 'test':
+            model_test(model)
+        else:
+            print('[!]Unknown phase')
+            exit(0)
 if __name__ == '__main__':
     tf.app.run()

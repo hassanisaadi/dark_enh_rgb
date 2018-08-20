@@ -27,11 +27,15 @@ echo "Starting run at: `date`"
 
 ./main.py\
   --epoch 25\
-  --batch_size 16\
+  --batch_size 10\
   --lr 0.001\
-  --use_gpu 1\
   --nPatchNum 32\
   --gpuid 0\
+  --lmbd_lum 0.1\
+  --lmbd_ycrcb 0.5\
+  --lmbd_vgg 0.4\
+  --num_layers 8\
+  --feature_map 32\
   --eval_every_ep 1\
   --phase train\
   --log_dir $log_dir"tb"\
@@ -40,5 +44,5 @@ echo "Starting run at: `date`"
   --eval_path ./data/eval\
   --logfile_path $log_dir"log.txt"\
   --model_name $model_name\
-  --hdf5_file ./data/data_lumchr_da0_p64_s64_par32_tr72676.hdf5
+  --hdf5_file ./data/data_lumchr_da0_p224_s112_par32_tr17633.hdf5
 

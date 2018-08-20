@@ -12,10 +12,10 @@ import cv2
 
 def generate_hdf5():
     PARALLAX = 32
-    PATCH_SIZE = 64
+    PATCH_SIZE = 224
     STEPH = 0
     STEPW = PARALLAX
-    STRIDE = 64
+    STRIDE = 112
     SRCDIR = '../Data/dark_enh_mb2014/train/'
     INTERPOLATION = cv2.INTER_CUBIC
     DATAAUG = 0
