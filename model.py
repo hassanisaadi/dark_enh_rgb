@@ -1,7 +1,6 @@
 import time
 from utils import *
 import random
-#from My_Vgg16 import *
 
 def resBlock(x, p1, p2, name, is_training):
     # p1["fs"]: feature map size
@@ -51,30 +50,15 @@ def enh_chr(y_hat_lum, x_chr, is_training, L=32, fm=64):
 
     return y
 
-def singleenh_lum(x_lum0, is_training, L=32, fm=64):
-    res = tf.layers.conv2d(x_lum0, fm, 3, padding='same', name='lum_conv_start', activation=None)
-    res = tf.nn.leaky_relu(res, alpha=0.2, name='lum_relu_start')
-
-    p1 = {"fs": fm, "fw":3}
-
-    for i in range(L):
-        res = resBlock(res, p1, p1, 'lum_resB%d' % (i+1), is_training)
-    
-    res = tf.layers.conv2d(res, fm, 3, padding='same', name='lum_conv', activation=None)
-    res = tf.layers.batch_normalization(res, training=is_training, name='lum_BN')
-
-    y = tf.layers.conv2d(res, 1, 3, padding='same', name='lum_conv_last', activation=None)
-    y = tf.nn.tanh(y, name='lum_tanh_last')
-
-    return y
-
 class imdualenh(object):
     def __init__(self, sess, batch_size=128, PARALLAX=64, model="dual", logfile="./logs/log.txt", 
-                 lmbd1=0.33, lmbd2=0.33, lmbd3=0.33, L=32, fm=64):
+                 lmbd1=0.33, lmbd2=0.33, #lmbd3=0.33,
+                 L=32, fm=64):
         self.sess = sess
+        self.model = model
         self.parallax = PARALLAX
         self.logfile = open(logfile, "w")
-        assert lmbd1 + lmbd2 + lmbd3 <= 1
+        assert lmbd1 + lmbd2 <= 1 #lmbd3 <= 1
 
         # Labels
         self.Y_LUM_   = tf.placeholder(tf.float32, [None, None, None, 1], name='Y_GT_LUM')
@@ -86,47 +70,36 @@ class imdualenh(object):
         self.X_chr    = tf.placeholder(tf.float32, [None, None, None, 2], name='X_CHR_LEFT')
 
         self.is_training = tf.placeholder(tf.bool, name='is_training')
+	
+        self.Y_LUM = dualenh_lum(self.X_lum0, self.X_lum, self.is_training, L, fm)
+        self.Y_YCRCB = enh_chr(self.Y_LUM, self.X_chr, self.is_training, L, fm)
 
-        if model == "dual":
-	    self.Y_LUM = dualenh_lum(self.X_lum0, self.X_lum, self.is_training, L, fm)
-            self.Y_YCRCB = enh_chr(self.Y_LUM, self.X_chr, self.is_training, L, fm)
-	elif model == "single":
-	    self.Y_LUM = singleenh_lum(self.X_lum0, self.is_training, L, fm)
-            self.Y_YCRCB = enh_chr(self.Y_LUM, self.X_chr, self.is_training, L, fm)
-	else:
-	    print("Not recognized the model.")
-            self.logfile.write("Not recognized the model.\n")
-	    sys.exit(1)
-
-        ### VGG16 ###
-        vgg_path = './vgg16_weights.npz'
-        vgg = My_Vgg16(vgg_path)
-        with tf.name_scope('vgg'):
-            self.VGG_f_, self.VGG_f = vgg.build(self.Y_YCRCB_, self.Y_YCRCB)
+        self.X_lum0_right = tf.split(self.X_lum, np.ones(self.parallax,'int32'),3)
 
         tf.summary.image('Y_HAT_LUM'  , self.Y_LUM , 1)
         tf.summary.image('Y_GT_LUM'   , self.Y_LUM_, 1)
         tf.summary.image('X_LUM_LEFT' , self.X_lum0, 1)
+        tf.summary.image('X_LUM_RIGHT', self.X_lum0_right[0], 1)
         tf.summary.image('Y_HAT_YCrCb', self.Y_YCRCB, 1)
         tf.summary.image('Y_GT_YCrCb' , self.Y_YCRCB_, 1)
         
         self.loss_lum   = (1.0 / batch_size) * tf.nn.l2_loss(self.Y_LUM_ - self.Y_LUM)
         self.loss_ycrcb = (1.0 / batch_size) * tf.nn.l2_loss(self.Y_YCRCB_ - self.Y_YCRCB)
-        self.loss_vgg   = (1.0 / batch_size) * tf.nn.l2_loss(self.VGG_f_ - self.VGG_f)
         self.lr = tf.placeholder(tf.float32, name='learning_rate')
         self.eva_psnr_lum = tf_psnr(self.Y_LUM, self.Y_LUM_)
         self.eva_psnr_ycrcb = tf_psnr(self.Y_YCRCB, self.Y_YCRCB_)
         optimizer = tf.train.AdamOptimizer(self.lr, name='AdamOptimizer')
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
-            self.train_op = optimizer.minimize(lmbd1 * self.loss_lum + lmbd2 * self.loss_ycrcb + lmbd3 * self.loss_vgg)
+            self.train_op = optimizer.minimize(lmbd1 * self.loss_lum + lmbd2 * self.loss_ycrcb) 
         init = tf.global_variables_initializer()
         self.sess.run(init)
         print("[*] Initialize model successfully...")
         self.logfile.write("[*] Initialize model successfully...\n")
         sys.stdout.flush()
 
-    def evaluate(self, iter_num, test_data_YL, test_data_XL, test_data_XR,
+    def evaluate(self, iter_num, 
+                 eval_X_lum0, eval_X_lum, eval_X_chr, eval_Y_lum, eval_Y_ycrcb,
                  sample_dir, summary_merged, summary_writer):
         print("[*] Evaluating...")
         self.logfile.write("[*] Evaluating...\n")
@@ -134,27 +107,12 @@ class imdualenh(object):
         
         psnr_sum_lum = 0
         psnr_sum_ycrcb = 0
-        for idx in range(len(test_data_YL)):
-            im_h, im_w, ch = test_data_YL[idx].shape
-            assert ch == 3
-            
-            # inputs
-            X_lum0 = np.zeros((1,im_h,im_w-self.parallax,1))
-            X_lum0[0,:,:,0] = (test_data_XL[idx][:,self.parallax:,0].astype(np.float32) / 127.5) - 1
-
-            X_lum  = np.zeros((1,im_h,im_w-self.parallax,self.parallax))
-            for p in range(0, self.parallax, 1):
-                X_lum[0,:,:,p] = (test_data_XR[idx][:,self.parallax-p:im_w-p,0].astype(np.float32) / 127.5) - 1
-
-            X_chr = np.zeros((1, im_h, im_w-self.parallax, 2))
-            X_chr[0,:,:,:] = (test_data_XL[idx][:,self.parallax:,1:].astype(np.float32) / 127.5) - 1
-            
-            # outpus
-            Y_GT_LUM = np.zeros((1,im_h,im_w-self.parallax,1))
-            Y_GT_LUM[0,:,:,:] = np.expand_dims((test_data_YL[idx][:,self.parallax:,0].astype(np.float32) / 127.5) - 1, 3)
-
-            Y_GT_YCRCB = np.zeros((1,im_h,im_w-self.parallax,3))
-            Y_GT_YCRCB[0,:,:,:] = (test_data_YL[idx][:,self.parallax:,:].astype(np.float32) / 127.5) - 1
+        for idx in range(len(eval_X_lum0)):
+            X_lum0      = np.expand_dims((eval_X_lum0[idx,:,:,:].astype(np.float32) / 127.5) - 1, 0)
+            X_lum       = np.expand_dims((eval_X_lum[idx,:,:,:].astype(np.float32)  / 127.5) - 1, 0)
+            X_chr       = np.expand_dims((eval_X_chr[idx,:,:,:].astype(np.float32)  / 127.5) - 1, 0)
+            Y_GT_lum    = np.expand_dims((eval_Y_lum[idx,:,:,:].astype(np.float32)  / 127.5) - 1, 0)
+            Y_GT_ycrcb  = np.expand_dims((eval_Y_ycrcb[idx,:,:,:].astype(np.float32)/ 127.5) - 1, 0)
 
             # run the model
             lum_hat_image, ycrcb_hat_image, psnr_summary = self.sess.run(
@@ -162,31 +120,37 @@ class imdualenh(object):
                        feed_dict={self.X_lum0: X_lum0,
                                   self.X_lum: X_lum,
                                   self.X_chr: X_chr,
-                                  self.Y_LUM_: Y_GT_LUM,
-                                  self.Y_YCRCB_: Y_GT_YCRCB,
+                                  self.Y_LUM_: Y_GT_lum,
+                                  self.Y_YCRCB_: Y_GT_ycrcb,
                                   self.is_training: False})
 
             summary_writer.add_summary(psnr_summary, iter_num)
-            groundtruth = test_data_YL[idx][:,self.parallax:,:].squeeze()
-            input_image = test_data_XL[idx][:,self.parallax:,:].squeeze()
+            groundtruth = eval_Y_ycrcb[idx,:,:,:].squeeze()
+            
+            in0 = np.expand_dims(eval_X_lum0[idx,:,:,0],2)
+            in1 = np.expand_dims(eval_X_chr[idx,:,:,0], 2)
+            in2 = np.expand_dims(eval_X_chr[idx,:,:,1], 2)
+            input_image = np.concatenate((in0, in1, in2), 2)
+
             outputimage_lum = (127.5*(lum_hat_image+1)).astype('uint8').squeeze()
             outputimage_ycrcb = (127.5*(ycrcb_hat_image+1)).astype('uint8').squeeze()
 
             # calculate PSNR
             psnr_lum = cal_psnr(groundtruth[:,:,0].squeeze(), outputimage_lum)
             psnr_ycrcb = cal_psnr(groundtruth, outputimage_ycrcb)
-            print("img%d PSNR Lum: %.2f, PSNR YCrCb: %.2f" % (idx + 1, psnr_lum, psnr_ycrcb))
-            self.logfile.write("img%d PSNR Lum: %.2f, PSNR YCrCb: %.2f\n" % (idx+1, psnr_lum, psnr_ycrcb))
+            print("img%2d PSNR Lum: %.2f, PSNR YCrCb: %.2f" % (idx + 1, psnr_lum, psnr_ycrcb))
+            self.logfile.write("img%2d PSNR Lum: %.2f, PSNR YCrCb: %.2f\n" % (idx+1, psnr_lum, psnr_ycrcb))
             sys.stdout.flush()
             psnr_sum_lum += psnr_lum
             psnr_sum_ycrcb += psnr_ycrcb
-            save_images(os.path.join(sample_dir, 'test%d_%d.png' % (idx + 1, iter_num)),
+
+            save_images(os.path.join(sample_dir, 'test%d_rgb_%d.png' % (idx + 1, iter_num)),
                         groundtruth, input_image, outputimage_ycrcb)
-            save_images(os.path.join(sample_dir, 'test_lum%d_%d.png' % (idx + 1, iter_num)),
+            save_images(os.path.join(sample_dir, 'test%d_lum_%d.png' % (idx + 1, iter_num)),
                         outputimage_lum)
 
-        avg_psnr_lum = psnr_sum_lum / len(test_data_YL)
-        avg_psnr_ycrcb = psnr_sum_ycrcb / len(test_data_YL)
+        avg_psnr_lum = psnr_sum_lum / len(eval_X_lum0)
+        avg_psnr_ycrcb = psnr_sum_ycrcb / len(eval_X_lum0)
         print("--- Test ---- Average PSNR (Lum, YCrCb) %.2f, %.2f ---" % (avg_psnr_lum, avg_psnr_ycrcb))
         self.logfile.write("--- Test ---- Average PSNR (Lum, YCrCb) %.2f, %.2f ---\n" % (avg_psnr_lum, avg_psnr_ycrcb))
         sys.stdout.flush()
@@ -196,10 +160,10 @@ class imdualenh(object):
     #            feed_dict={self.Y_:data_gt, self.X:data_in, self.is_training: False})
     #    return output_clean_image, noisy_image, psnr
 
-    def train(self, data, eval_data_YL, eval_data_XL, eval_data_XR, 
+    def train(self, data, # eval_data_YL, eval_data_XL, eval_data_XR, 
               batch_size, ckpt_dir, epoch, lr, sample_dir,
               log_dir, eval_every_epoch=2):
-        data_num = data["X_lum"].shape[0]
+        data_num = data["X_lum0_tr"].shape[0]
         numBatch = int(data_num / batch_size)
         # load pretrained model
         load_model_status, global_step = self.load(ckpt_dir)
@@ -219,7 +183,6 @@ class imdualenh(object):
         # make summary
         tf.summary.scalar('loss_lum', self.loss_lum)
         tf.summary.scalar('loss_ycrcb', self.loss_ycrcb)
-        tf.summary.scalar('loss_vgg', self.loss_vgg)
         tf.summary.scalar('lr'  , self.lr)
         writer = tf.summary.FileWriter(log_dir, self.sess.graph)
         merged = tf.summary.merge_all()
@@ -229,7 +192,15 @@ class imdualenh(object):
         self.logfile.write("[*] Start training, with start epoch %d start iter %d : \n" % (start_epoch, iter_num))
         sys.stdout.flush()
         start_time = time.time()
-        self.evaluate(iter_num, eval_data_YL, eval_data_XL, eval_data_XR,
+
+        eval_X_lum0  = data["X_lum0_eval"]
+        eval_X_lum   = data["X_lum_eval"]
+        eval_X_chr   = data["X_chr_eval"]
+        eval_Y_lum   = data["Y_lum_eval"]
+        eval_Y_ycrcb = data["Y_ycrcb_eval"]
+        
+        self.evaluate(iter_num, 
+                      eval_X_lum0, eval_X_lum, eval_X_chr, eval_Y_lum, eval_Y_ycrcb,
                       sample_dir=sample_dir, summary_merged=summary_psnr,
                       summary_writer=writer)
         for epoch in xrange(start_epoch, epoch):
@@ -238,13 +209,13 @@ class imdualenh(object):
                 i_s = blist[batch_id] * batch_size
                 i_e = min((blist[batch_id] + 1 ) * batch_size, data_num)
 
-                batch_X_lum0 = (np.expand_dims(data["X_lum"][i_s:i_e, ..., 0],3).astype(np.float32) / 127.5) - 1
-                batch_X_lum  = (data["X_lum"][i_s:i_e, ..., 1:].astype(np.float32) / 127.5) - 1
-                batch_X_chr  = (data["X_chr"][i_s:i_e, ...].astype(np.float32) / 127.5) - 1
+                batch_X_lum0 = (np.expand_dims(data["X_lum0_tr"][i_s:i_e, ..., 0],3).astype(np.float32) / 127.5) - 1
+                batch_X_lum  = (data["X_lum_tr"][i_s:i_e, ...].astype(np.float32) / 127.5) - 1
+                batch_X_chr  = (data["X_chr_tr"][i_s:i_e, ...].astype(np.float32) / 127.5) - 1
 
-                batch_Y_LUM = (data["Y_lum"][i_s:i_e, ...].astype(np.float32) / 127.5) - 1
+                batch_Y_LUM = (data["Y_lum_tr"][i_s:i_e, ...].astype(np.float32) / 127.5) - 1
                 batch_Y_LUM = np.expand_dims(batch_Y_LUM[:,:,:,0], 3)
-                batch_Y_YCRCB = (data["Y_chr"][i_s:i_e, ...].astype(np.float32) / 127.5) - 1
+                batch_Y_YCRCB = (data["Y_ycrcb_tr"][i_s:i_e, ...].astype(np.float32) / 127.5) - 1
 
                 _, loss_lum, loss_ycrcb, summary = self.sess.run(
                         [self.train_op, self.loss_lum, self.loss_ycrcb, merged],
@@ -264,7 +235,8 @@ class imdualenh(object):
                 iter_num += 1
                 writer.add_summary(summary, iter_num)
             if np.mod(epoch + 1, eval_every_epoch) == 0:
-                self.evaluate(iter_num, eval_data_YL, eval_data_XL, eval_data_XR,
+                self.evaluate(iter_num, 
+                              eval_X_lum0, eval_X_lum, eval_X_chr, eval_Y_lum, eval_Y_ycrcb,
                               sample_dir=sample_dir, summary_merged=summary_psnr,
                               summary_writer=writer)  # eval_data value range is 0-255
                 self.save(iter_num, ckpt_dir)
@@ -331,114 +303,114 @@ class imdualenh(object):
 
 
 
-VGG_MEAN = [103.939, 116.779, 123.68]
-
-
-class My_Vgg16:
-    def __init__(self, vgg16_npy_path=None):
-        if vgg16_npy_path is None:
-            path = sys.modules[self.__class__.__module__].__file__
-            # print path
-            path = os.path.abspath(os.path.join(path, os.pardir))
-            # print path
-            path = os.path.join(path, "vgg16.npy")
-            print(path)
-            vgg16_npy_path = path
-
-        #self.data_dict = np.load(vgg16_npy_path, encoding='latin1').item()
-        self.data_dict = np.load(vgg16_npy_path, encoding='latin1')
-
-        #weights = np.load(vgg16_npy_path)
-        #keys = sorted(weights.keys())
-        #for i, k in enumerate(keys):
-        #    print i, k, np.shape(weights[k])
-        #    #sess.run(self.parameters[i].assign(weights[k]))
-
-        #sys.exit()
-        #print("npy file loaded")
-
-
-
-
-    def _max_pool(self, bottom, name):
-        return tf.nn.max_pool(bottom, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1],
-                              padding='SAME', name=name)
-
-
-    def _conv_layer(self, bottom, name):
-        with tf.variable_scope(name) as scope:
-            filt = self.get_conv_filter(name)
-            conv = tf.nn.conv2d(bottom, filt, [1, 1, 1, 1], padding='SAME')
-
-            conv_biases = self.get_bias(name)
-            bias = tf.nn.bias_add(conv, conv_biases)
-
-            relu = tf.nn.relu(bias)
-            return relu
-
-
-    def get_conv_filter(self, name):
-        #return tf.Variable(self.data_dict[name+'_W'], name="filter")
-        return tf.constant(self.data_dict[name+'_W'], name="filter")
-        # use tf.constant() to prevent retraining it accidentally
-
-
-    def get_bias(self, name):
-        #return tf.Variable(self.data_dict[name+'_b'], name="biases")
-        return tf.constant(self.data_dict[name+'_b'], name="biases")
-        # use tf.constant() to prevent retraining it accidentally
-        
-    
-    def build(self, y_crcb1, y_crcb2):#, train=False):
-        y_crcb = tf.concat([y_crcb1, y_crcb2], 0)
-
-        #rgb_scaled = rgb * 255.0
-        ycrcb_n = tf.scalar_mul(127.5, y_crcb + 1)
-
-        rgb = tf_ycrcb2rgb(ycrcb_n)
-
-        #rgb_scaled = tf.image.resize_images(rgb, [224, 224])
-        rgb_scaled = rgb
-
-        # Convert RGB to BGR
-        red, green, blue = tf.split(rgb_scaled, 3, 3)
-        #assert red.get_shape().as_list()[1:3] == [224, 224]
-        #assert green.get_shape().as_list()[1:3] == [224, 224]
-        #assert blue.get_shape().as_list()[1:3] == [224, 224]
-        bgr = tf.concat([
-            blue - VGG_MEAN[0],
-            green - VGG_MEAN[1],
-            red - VGG_MEAN[2],
-        ], 3)
-
-        #assert bgr.get_shape().as_list()[1:3] == [224, 224]
-
-        conv1_1 = self._conv_layer(bgr, "conv1_1")
-        conv1_2 = self._conv_layer(conv1_1, "conv1_2")
-        pool1 = self._max_pool(conv1_2, 'pool1')
-
-        conv2_1 = self._conv_layer(pool1, "conv2_1")
-        conv2_2 = self._conv_layer(conv2_1, "conv2_2")
-        pool2 = self._max_pool(conv2_2, 'pool2')
-
-        conv3_1 = self._conv_layer(pool2, "conv3_1")
-        conv3_2 = self._conv_layer(conv3_1, "conv3_2")
-        conv3_3 = self._conv_layer(conv3_2, "conv3_3")
-        pool3 = self._max_pool(conv3_3, 'pool3')
-
-        conv4_1 = self._conv_layer(pool3, "conv4_1")
-        conv4_2 = self._conv_layer(conv4_1, "conv4_2")
-        conv4_3 = self._conv_layer(conv4_2, "conv4_3")
-        pool4 = self._max_pool(conv4_3, 'pool4')
-
-        conv5_1 = self._conv_layer(pool4, "conv5_1")
-        conv5_2 = self._conv_layer(conv5_1, "conv5_2")
-        conv5_3 = self._conv_layer(conv5_2, "conv5_3")
-        pool5 = self._max_pool(conv5_3, 'pool5')
-        
-        #shape_pool5 = pool5.get_shape().as_list()[1:]
-        #assert 'pool5', shape_pool5 == [7, 7, 512]
-        
-        f1, f2 = tf.split(pool5, 2, 0)
-        return f1, f2
-        
+#VGG_MEAN = [103.939, 116.779, 123.68]
+#
+#
+#class My_Vgg16:
+#    def __init__(self, vgg16_npy_path=None):
+#        if vgg16_npy_path is None:
+#            path = sys.modules[self.__class__.__module__].__file__
+#            # print path
+#            path = os.path.abspath(os.path.join(path, os.pardir))
+#            # print path
+#            path = os.path.join(path, "vgg16.npy")
+#            print(path)
+#            vgg16_npy_path = path
+#
+#        #self.data_dict = np.load(vgg16_npy_path, encoding='latin1').item()
+#        self.data_dict = np.load(vgg16_npy_path, encoding='latin1')
+#
+#        #weights = np.load(vgg16_npy_path)
+#        #keys = sorted(weights.keys())
+#        #for i, k in enumerate(keys):
+#        #    print i, k, np.shape(weights[k])
+#        #    #sess.run(self.parameters[i].assign(weights[k]))
+#
+#        #sys.exit()
+#        #print("npy file loaded")
+#
+#
+#
+#
+#    def _max_pool(self, bottom, name):
+#        return tf.nn.max_pool(bottom, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1],
+#                              padding='SAME', name=name)
+#
+#
+#    def _conv_layer(self, bottom, name):
+#        with tf.variable_scope(name) as scope:
+#            filt = self.get_conv_filter(name)
+#            conv = tf.nn.conv2d(bottom, filt, [1, 1, 1, 1], padding='SAME')
+#
+#            conv_biases = self.get_bias(name)
+#            bias = tf.nn.bias_add(conv, conv_biases)
+#
+#            relu = tf.nn.relu(bias)
+#            return relu
+#
+#
+#    def get_conv_filter(self, name):
+#        #return tf.Variable(self.data_dict[name+'_W'], name="filter")
+#        return tf.constant(self.data_dict[name+'_W'], name="filter")
+#        # use tf.constant() to prevent retraining it accidentally
+#
+#
+#    def get_bias(self, name):
+#        #return tf.Variable(self.data_dict[name+'_b'], name="biases")
+#        return tf.constant(self.data_dict[name+'_b'], name="biases")
+#        # use tf.constant() to prevent retraining it accidentally
+#        
+#    
+#    def build(self, y_crcb1, y_crcb2):#, train=False):
+#        y_crcb = tf.concat([y_crcb1, y_crcb2], 0)
+#
+#        #rgb_scaled = rgb * 255.0
+#        ycrcb_n = tf.scalar_mul(127.5, y_crcb + 1)
+#
+#        rgb = tf_ycrcb2rgb(ycrcb_n)
+#
+#        #rgb_scaled = tf.image.resize_images(rgb, [224, 224])
+#        rgb_scaled = rgb
+#
+#        # Convert RGB to BGR
+#        red, green, blue = tf.split(rgb_scaled, 3, 3)
+#        #assert red.get_shape().as_list()[1:3] == [224, 224]
+#        #assert green.get_shape().as_list()[1:3] == [224, 224]
+#        #assert blue.get_shape().as_list()[1:3] == [224, 224]
+#        bgr = tf.concat([
+#            blue - VGG_MEAN[0],
+#            green - VGG_MEAN[1],
+#            red - VGG_MEAN[2],
+#        ], 3)
+#
+#        #assert bgr.get_shape().as_list()[1:3] == [224, 224]
+#
+#        conv1_1 = self._conv_layer(bgr, "conv1_1")
+#        conv1_2 = self._conv_layer(conv1_1, "conv1_2")
+#        pool1 = self._max_pool(conv1_2, 'pool1')
+#
+#        conv2_1 = self._conv_layer(pool1, "conv2_1")
+#        conv2_2 = self._conv_layer(conv2_1, "conv2_2")
+#        pool2 = self._max_pool(conv2_2, 'pool2')
+#
+#        conv3_1 = self._conv_layer(pool2, "conv3_1")
+#        conv3_2 = self._conv_layer(conv3_1, "conv3_2")
+#        conv3_3 = self._conv_layer(conv3_2, "conv3_3")
+#        pool3 = self._max_pool(conv3_3, 'pool3')
+#
+#        conv4_1 = self._conv_layer(pool3, "conv4_1")
+#        conv4_2 = self._conv_layer(conv4_1, "conv4_2")
+#        conv4_3 = self._conv_layer(conv4_2, "conv4_3")
+#        pool4 = self._max_pool(conv4_3, 'pool4')
+#
+#        conv5_1 = self._conv_layer(pool4, "conv5_1")
+#        conv5_2 = self._conv_layer(conv5_1, "conv5_2")
+#        conv5_3 = self._conv_layer(conv5_2, "conv5_3")
+#        pool5 = self._max_pool(conv5_3, 'pool5')
+#        
+#        #shape_pool5 = pool5.get_shape().as_list()[1:]
+#        #assert 'pool5', shape_pool5 == [7, 7, 512]
+#        
+#        f1, f2 = tf.split(pool5, 2, 0)
+#        return f1, f2
+#        
