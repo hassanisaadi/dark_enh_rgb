@@ -15,13 +15,13 @@ def generate_hdf5():
     np.random.seed(42)
 
     NPATCHES = 17 #number of neighbor patches + itself
-    SHIFT_FACTOR = 4
-    PATCH_SIZE = 64
+    SHIFT_FACTOR = 1
+    PATCH_SIZE = 32
     SRCDIR_TR   = '../Data/dark_enh_mb2014/train/'
     SRCDIR_EVAL = '../Data/dark_enh_mb2014/eval/'
     INTERPOLATION = cv2.INTER_CUBIC
     PATCH_PER_IMAGE = 1 # %
-    LL_en = 1   # WARNING IMPORTANT!!!!!!
+    LL_en = 0   # WARNING IMPORTANT!!!!!!
 
     fdatax  = sorted(glob.glob(SRCDIR_TR + 'X_left/*.png'))
     fdatay  = sorted(glob.glob(SRCDIR_TR + 'Y_left/*.png'))
@@ -315,7 +315,7 @@ def generate_hdf5():
         fdataxl = sorted(glob.glob(SRCDIR_EVAL + 'X_left/im%d_*.png' % i))
         fdataxr = sorted(glob.glob(SRCDIR_EVAL + 'X_right/im%d_*.png' % i))
         
-        print("\t Tr scene [%2d/%2d], %d X images, %d patches per X images" % (i+1, numPicsY, len(fdataxl), N))
+        print("\t Eval scene [%2d/%2d], %d X images, %d patches per X images" % (i+1, numEvalY, len(fdataxl), N))
         
         for j in range(len(fdataxl)):
             assert fdataxl[j][-5] == fdataxr[j][-5]

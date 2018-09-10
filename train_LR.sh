@@ -4,7 +4,7 @@ model_name="LR"
 
 if [ $# -eq 0 ]
 then
-   log_dir="./logs/"$model_name"-"`date "+%Y%m%d_%H%M%S/"`
+   log_dir="./logs/dual-"$model_name"-"`date "+%Y%m%d_%H%M%S/"`
    echo "Everything run from scratch."
    if [ ! -d "$log_dir" ]; then
       mkdir -p $log_dir
@@ -26,23 +26,23 @@ echo "Starting run at: `date`"
 #tensorboard --logdir=$logdir"tb" --port=8008 &
 
 ./main.py\
-  --epoch 15\
-  --batch_size 32\
+  --epoch 10\
+  --batch_size 64\
   --lr 0.001\
-  --nPatchNum 32\
-  --gpuid 1\
-  --lmbd_lum 0.2\
-  --lmbd_ycrcb 0.8\
-  --num_layers 8\
-  --feature_map 32\
+  --nPatchNum 64\
+  --gpuid 0\
+  --lmbd_lum 0.5\
+  --lmbd_ycrcb 0.5\
+  --num_layers 32\
+  --feature_map 64\
   --eval_every_ep 1\
+  --is_single 0\
+  --gamma_en 1\
   --phase train\
   --log_dir $log_dir"tb"\
   --checkpoint_dir $log_dir"checkpoint"\
   --sample_dir $log_dir"eval_results"\
   --logfile_path $log_dir"log.txt"\
   --model_name $model_name\
-  --hdf5_file ./data/data_lumchr_LR_da0_p64_s64_par32_tr67665.hdf5
+  --hdf5_file ./data/data_lumchr_LR_da0_p33_s24_par64_shft1_tr517586.hdf5
 
-  #--lmbd_vgg 0.4\
-  #--eval_path ./data/eval\

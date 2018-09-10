@@ -14,8 +14,19 @@ def resBlock(x, p1, p2, name, is_training):
         y = tf.add(r,x)
         return y
 
-def dualenh_lum(x_lum0, x_lum, is_training, L=32, fm=64):
-    xx  = tf.concat([x_lum0, x_lum], 3)
+def dualenh_lum(x_lum0, x_lum, is_training, L=32, fm=64, is_single=0, gamma_en=0):
+    if is_single:
+        xx = x_lum0
+    else:
+        xx = tf.concat([x_lum0, x_lum], 3)
+
+    if gamma_en == 1:
+        xx_scaled = (xx+1)/2
+        xx_scaled = tf.image.adjust_gamma(xx_scaled, gamma=0.5, gain=1)
+        xx = 2 * xx_scaled - 1
+        xx_split = tf.split(xx, np.ones(xx.shape[3], 'int32'), 3)
+        tf.summary.image('gamma_corrected_image', xx_split[0],1)
+
     res = tf.layers.conv2d(xx, fm, 3, padding='same', name='lum_conv_start', activation=None)
     res = tf.nn.leaky_relu(res, alpha=0.2, name='lum_lrelu_start')
     
@@ -52,13 +63,13 @@ def enh_chr(y_hat_lum, x_chr, is_training, L=32, fm=64):
 
 class imdualenh(object):
     def __init__(self, sess, batch_size=128, PARALLAX=64, model="dual", logfile="./logs/log.txt", 
-                 lmbd1=0.33, lmbd2=0.33, #lmbd3=0.33,
-                 L=32, fm=64):
+                 lmbd1=0.33, lmbd2=0.33,
+                 L=32, fm=64, is_evalp=False, is_single=False, gamma_en=0):
         self.sess = sess
         self.model = model
         self.parallax = PARALLAX
-        self.logfile = open(logfile, "w")
-        assert lmbd1 + lmbd2 <= 1 #lmbd3 <= 1
+        self.logfile = logfile
+        self.is_evalp = is_evalp
 
         # Labels
         self.Y_LUM_   = tf.placeholder(tf.float32, [None, None, None, 1], name='Y_GT_LUM')
@@ -71,7 +82,7 @@ class imdualenh(object):
 
         self.is_training = tf.placeholder(tf.bool, name='is_training')
 	
-        self.Y_LUM = dualenh_lum(self.X_lum0, self.X_lum, self.is_training, L, fm)
+        self.Y_LUM = dualenh_lum(self.X_lum0, self.X_lum, self.is_training, L, fm, is_single, gamma_en)
         self.Y_YCRCB = enh_chr(self.Y_LUM, self.X_chr, self.is_training, L, fm)
 
         self.X_lum0_right = tf.split(self.X_lum, np.ones(self.parallax,'int32'),3)
@@ -92,18 +103,19 @@ class imdualenh(object):
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
             self.train_op = optimizer.minimize(lmbd1 * self.loss_lum + lmbd2 * self.loss_ycrcb) 
+            #self.train_op = optimizer.minimize(self.loss_ycrcb) 
         init = tf.global_variables_initializer()
         self.sess.run(init)
         print("[*] Initialize model successfully...")
         self.logfile.write("[*] Initialize model successfully...\n")
-        sys.stdout.flush()
+        self.logfile.flush()
 
     def evaluate(self, iter_num, 
                  eval_X_lum0, eval_X_lum, eval_X_chr, eval_Y_lum, eval_Y_ycrcb,
                  sample_dir, summary_merged, summary_writer):
         print("[*] Evaluating...")
         self.logfile.write("[*] Evaluating...\n")
-        sys.stdout.flush()
+        self.logfile.flush()
         
         psnr_sum_lum = 0
         psnr_sum_ycrcb = 0
@@ -138,22 +150,25 @@ class imdualenh(object):
             # calculate PSNR
             psnr_lum = cal_psnr(groundtruth[:,:,0].squeeze(), outputimage_lum)
             psnr_ycrcb = cal_psnr(groundtruth, outputimage_ycrcb)
-            print("img%2d PSNR Lum: %.2f, PSNR YCrCb: %.2f" % (idx + 1, psnr_lum, psnr_ycrcb))
-            self.logfile.write("img%2d PSNR Lum: %.2f, PSNR YCrCb: %.2f\n" % (idx+1, psnr_lum, psnr_ycrcb))
-            sys.stdout.flush()
+            if not self.is_evalp:
+                print("img%2d PSNR Lum: %2.2f, PSNR YCrCb: %2.2f" % (idx + 1, psnr_lum, psnr_ycrcb))
+                self.logfile.write("img%2d PSNR Lum: %2.2f, PSNR YCrCb: %2.2f\n" % (idx+1, psnr_lum, psnr_ycrcb))
+                self.logfile.flush()
             psnr_sum_lum += psnr_lum
             psnr_sum_ycrcb += psnr_ycrcb
 
-            save_images(os.path.join(sample_dir, 'test%d_rgb_%d.png' % (idx + 1, iter_num)),
+            if not self.is_evalp:
+                save_images(os.path.join(sample_dir, 'test%d_rgb_%d.png' % (idx + 1, iter_num)),
                         groundtruth, input_image, outputimage_ycrcb)
-            save_images(os.path.join(sample_dir, 'test%d_lum_%d.png' % (idx + 1, iter_num)),
-                        outputimage_lum)
+                save_images(os.path.join(sample_dir, 'test%d_rgb_%d_gt.png' % (idx+1, iter_num)), groundtruth)
+                save_images(os.path.join(sample_dir, 'test%d_rgb_%d_inputLeft.png' % (idx+1, iter_num)), input_image)
+                save_images(os.path.join(sample_dir, 'test%d_rgb_%d_outputLeft.png' % (idx+1, iter_num)), outputimage_ycrcb)
 
         avg_psnr_lum = psnr_sum_lum / len(eval_X_lum0)
         avg_psnr_ycrcb = psnr_sum_ycrcb / len(eval_X_lum0)
         print("--- Test ---- Average PSNR (Lum, YCrCb) %.2f, %.2f ---" % (avg_psnr_lum, avg_psnr_ycrcb))
         self.logfile.write("--- Test ---- Average PSNR (Lum, YCrCb) %.2f, %.2f ---\n" % (avg_psnr_lum, avg_psnr_ycrcb))
-        sys.stdout.flush()
+        self.logfile.flush()
 
     #def denoise(self, data_gt, data_in):
     #    output_clean_image, noisy_image, psnr = self.sess.run([self.Y, self.X, self.eva_psnr],
@@ -163,7 +178,7 @@ class imdualenh(object):
     def train(self, data, # eval_data_YL, eval_data_XL, eval_data_XR, 
               batch_size, ckpt_dir, epoch, lr, sample_dir,
               log_dir, eval_every_epoch=2):
-        data_num = data["X_lum0_tr"].shape[0]
+        data_num = 517586 #data["X_lum0_tr"].shape[0]
         numBatch = int(data_num / batch_size)
         # load pretrained model
         load_model_status, global_step = self.load(ckpt_dir)
@@ -179,7 +194,7 @@ class imdualenh(object):
             start_step = 0
             print("[*] Not find pretrained model!")
             self.logfile.write("[*] Not find pretrained model\n")
-        sys.stdout.flush()
+        self.logfile.flush()
         # make summary
         tf.summary.scalar('loss_lum', self.loss_lum)
         tf.summary.scalar('loss_ycrcb', self.loss_ycrcb)
@@ -190,7 +205,7 @@ class imdualenh(object):
         summary_psnr = tf.summary.scalar('eva_psnr_ycrcb', self.eva_psnr_ycrcb)
         print("[*] Start training, with start epoch %d start iter %d : " % (start_epoch, iter_num))
         self.logfile.write("[*] Start training, with start epoch %d start iter %d : \n" % (start_epoch, iter_num))
-        sys.stdout.flush()
+        self.logfile.flush()
         start_time = time.time()
 
         eval_X_lum0  = data["X_lum0_eval"]
@@ -231,7 +246,7 @@ class imdualenh(object):
                           % (epoch + 1, batch_id + 1, numBatch, time.time() - start_time, loss_lum, loss_ycrcb))
                     self.logfile.write("Epoch: [%2d] [%4d/%4d] time: %4.4f, loss_lum: %.6f, loss_ycrcb: %.6f\n" 
                           % (epoch + 1, batch_id + 1, numBatch, time.time() - start_time, loss_lum, loss_ycrcb))
-                    sys.stdout.flush()
+                    self.logfile.flush()
                 iter_num += 1
                 writer.add_summary(summary, iter_num)
             if np.mod(epoch + 1, eval_every_epoch) == 0:
@@ -239,11 +254,11 @@ class imdualenh(object):
                               eval_X_lum0, eval_X_lum, eval_X_chr, eval_Y_lum, eval_Y_ycrcb,
                               sample_dir=sample_dir, summary_merged=summary_psnr,
                               summary_writer=writer)  # eval_data value range is 0-255
-                self.save(iter_num, ckpt_dir)
+                if not self.is_evalp:
+                    self.save(iter_num, ckpt_dir)
         print("[*] Finish training.")
         self.logfile.write("[*] Finish training.\n")
-        self.logfile.close()
-        sys.stdout.flush()
+        self.logfile.flush()
 
     def save(self, iter_num, ckpt_dir, model_name='dualenh'):
         saver = tf.train.Saver()
@@ -252,7 +267,7 @@ class imdualenh(object):
             os.makedirs(checkpoint_dir)
         print("[*] Saving model...")
         self.logfile.write("[*] Saving model...\n")
-        sys.stdout.flush()
+        self.logfile.flush()
         saver.save(self.sess,
                    os.path.join(checkpoint_dir, model_name),
                    global_step=iter_num)
@@ -260,7 +275,7 @@ class imdualenh(object):
     def load(self, checkpoint_dir):
         print("[*] Reading checkpoint...")
         self.logfile.write("[*] Reading checkpoint...\n")
-        sys.stdout.flush()
+        self.logfile.flush()
         saver = tf.train.Saver()
         ckpt = tf.train.get_checkpoint_state(checkpoint_dir)
         if ckpt and ckpt.model_checkpoint_path:
@@ -271,35 +286,59 @@ class imdualenh(object):
         else:
             return False, 0
 
-#    def test(self, test_files, ckpt_dir, save_dir):
-#        """Test CNN_PAR"""
-#        # init variables
-#        tf.initialize_all_variables().run()
-#        assert len(test_files) != 0, 'No testing data!'
-#        load_model_status, global_step = self.load(ckpt_dir)
-#        assert load_model_status == True, '[!] Load weights FAILED...'
-#        print(" [*] Load weights SUCCESS...")
-#        sys.stdout.flush()
-#        psnr_sum = 0
-#        print("[*] " + 'noise level: ' + str(self.sigma) + " start testing...")
-#        sys.stdout.flush()
-#        for idx in xrange(len(test_files)):
-#            clean_image = load_images(test_files[idx]).astype(np.float32) / 255.0
-#            output_clean_image, noisy_image = self.sess.run([self.Y, self.X],
-#                                                            feed_dict={self.Y_: clean_image, self.is_training: False})
-#            groundtruth = np.clip(255 * clean_image, 0, 255).astype('uint8')
-#            noisyimage = np.clip(255 * noisy_image, 0, 255).astype('uint8')
-#            outputimage = np.clip(255 * output_clean_image, 0, 255).astype('uint8')
-#            # calculate PSNR
-#            psnr = cal_psnr(groundtruth, outputimage)
-#            print("img%d PSNR: %.2f" % (idx, psnr))
-#            sys.stdout.flush()
-#            psnr_sum += psnr
-#            save_images(os.path.join(save_dir, 'noisy%d.png' % idx), noisyimage)
-#            save_images(os.path.join(save_dir, 'denoised%d.png' % idx), outputimage)
-#        avg_psnr = psnr_sum / len(test_files)
-#        print("--- Average PSNR %.2f ---" % avg_psnr)
-#        sys.stdout.flush()
+    def test(self, test_files_X_left, test_files_X_right, test_files_Y_left_gt, ckpt_dir, save_dir):
+        """Test CNN_PAR"""
+        # init variables
+        #tf.initialize_all_variables().run()
+        tf.global_variables_initializer().run()
+        assert len(test_files_X_left) != 0, 'No testing data!'
+        assert len(test_files_X_left) == len(test_files_X_right), 'left and right images are not matched!'
+        load_model_status, global_step = self.load(ckpt_dir)
+        assert load_model_status == True, '[!] Load weights FAILED...'
+        print(" [*] Load weights SUCCESS...")
+        
+        psnr_sum = 0
+        for idx in xrange(len(test_files_X_left)):
+            X_left = load_images(test_files_X_left[idx])
+            X_right = load_images(test_files_X_right[idx])
+            Y_left_GT = load_images(test_files_Y_left_gt[idx])
+
+            h, w, _ = X_left.shape
+
+            X_lum0 = np.expand_dims(X_left[: ,self.parallax:, 0].astype(np.float32)  ,0) / 127.5 - 1
+            X_chr  = np.expand_dims(X_left[: ,self.parallax:, 1:].astype(np.float32) ,0) / 127.5 - 1
+            Y_lum  = np.expand_dims(Y_left_GT[: ,self.parallax:, 0].astype(np.float32)  ,0) / 127.5 - 1
+            Y_ycrcb = np.expand_dims(Y_left_GT[:,self.parallax:, :].astype(np.float32)  ,0) / 127.5 - 1
+
+            X_lum0 = np.expand_dims(X_lum0, 3)
+            Y_lum  = np.expand_dims(Y_lum , 3)
+
+            X_lum = np.zeros((1, h, w-self.parallax,self.parallax))
+            pp = 0
+            for p in range(0, self.parallax, 1):
+                X_lum[0,:,:,p] = X_right[:,self.parallax-pp:w-pp,0].astype(np.float32) / 127.5 - 1
+                pp += 1
+            
+            output_image = self.sess.run([self.Y_YCRCB],
+                                                      feed_dict={
+                                                          self.X_lum0   : X_lum0,
+                                                          self.X_lum    : X_lum,
+                                                          self.X_chr    : X_chr,
+                                                          self.Y_LUM_   : Y_lum,
+                                                          self.Y_YCRCB_ : Y_ycrcb,
+                                                          self.is_training: False})
+            groundtruth = Y_left_GT[:, self.parallax:,:]
+            dark_image  = X_left[:, self.parallax:,:]
+            outputimage = np.clip(255*(output_image[0] + 1)/2.0, 0, 255).astype('uint8')
+            # calculate PSNR
+            psnr = cal_psnr(groundtruth, outputimage)
+            print("img%d PSNR: %.2f" % (idx, psnr))
+            psnr_sum += psnr
+            save_images(os.path.join(save_dir, 'dark_image%d.png' % idx), dark_image)
+            save_images(os.path.join(save_dir, 'enhanced%d.png' % idx), outputimage)
+            save_images(os.path.join(save_dir, 'ground_truth%d.png' % idx), groundtruth)
+        avg_psnr = psnr_sum / len(test_files_X_left)
+        print("--- Average PSNR %.2f ---" % avg_psnr)
 
 
 

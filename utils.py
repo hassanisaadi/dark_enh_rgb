@@ -6,6 +6,7 @@ import numpy as np
 import tensorflow as tf
 import cv2
 import h5py
+import re
 
 def data_augmentation(image, mode):
     if mode == 0:
@@ -122,6 +123,7 @@ def save_images(filepath, ground_truth, noisy_image=None, clean_image=None):
     clean_image = np.squeeze(clean_image)
     if not noisy_image.any() and not clean_image.any():
         cat_image = ground_truth
+        cat_image = cv2.cvtColor(cat_image, cv2.COLOR_YCrCb2BGR)
         cv2.imwrite(filepath, cat_image.astype('uint8'))
     else:
         cat_image = np.concatenate([ground_truth, noisy_image, clean_image], axis=1)
@@ -159,4 +161,124 @@ def tf_ycrcb2rgb(x):
     rgb = tf.clip_by_value(rgb, 0, 255)
     return rgb
 
+def mapMB(y_idx):
+    if   y_idx >= 0  and y_idx <= 3 :
+        return 0
+    elif y_idx >= 4  and y_idx <= 7 :
+        return 1
+    elif y_idx >= 8  and y_idx <= 10:
+        return 2
+    elif y_idx >= 11 and y_idx <= 14:
+        return 3
+    elif y_idx >= 15 and y_idx <= 18:
+        return 4
+    elif y_idx >= 19 and y_idx <= 22:
+        return 5
+    elif y_idx >= 23 and y_idx <= 25:
+        return 6
+    elif y_idx >= 26 and y_idx <= 29:
+        return 7
+    elif y_idx >= 30 and y_idx <= 32:
+        return 8
+    elif y_idx >= 33 and y_idx <= 36:
+        return 9
+    elif y_idx >= 37 and y_idx <= 40:
+        return 10
+    elif y_idx >= 41 and y_idx <= 44:
+        return 11
+    elif y_idx >= 45 and y_idx <= 48:
+        return 12
+    elif y_idx >= 49 and y_idx <= 51:
+        return 13
+    elif y_idx >= 52 and y_idx <= 55:
+        return 14
+    elif y_idx >= 56 and y_idx <= 59:
+        return 15
+    elif y_idx >= 60 and y_idx <= 64:
+        return 16
+    elif y_idx >= 65 and y_idx <= 69:
+        return 17
+    elif y_idx >= 70 and y_idx <= 73:
+        return 18
+    elif y_idx >= 74 and y_idx <= 75:
+        return 19
+    elif y_idx >= 76 and y_idx <= 77:
+        return 20
+    else:
+        print("Wrong idx!!!")
+        sys.exit(1)
+
+
+def load_pfm(fname, downsample):
+  if downsample:
+        if not os.path.isfile(fname + '.H.pfm'):
+            x, scale = load_pfm(fname, False)
+            x = x / 2
+            x_ = np.zeros((x.shape[0] // 2, x.shape[1] // 2), dtype=np.float32)
+            for i in range(0, x.shape[0], 2):
+                for j in range(0, x.shape[1], 2):
+                    tmp = x[i:i+2,j:j+2].ravel()
+                    x_[i // 2,j // 2] = np.sort(tmp)[1]
+            save_pfm(fname + '.H.pfm', x_, scale)
+            return x_, scale
+        else:
+            fname += '.H.pfm'
+  color = None
+  width = None
+  height = None
+  scale = None
+  endian = None
+  
+  file = open(fname)
+  header = file.readline().rstrip()
+  if header == 'PF':
+    color = True    
+  elif header == 'Pf':
+    color = False
+  else:
+    raise Exception('Not a PFM file.')
+ 
+  dim_match = re.match(r'^(\d+)\s(\d+)\s$', file.readline())
+  if dim_match:
+    width, height = map(int, dim_match.groups())
+  else:
+    raise Exception('Malformed PFM header.')
+ 
+  scale = float(file.readline().rstrip())
+  if scale < 0: # little-endian
+    endian = '<'
+    scale = -scale
+  else:
+    endian = '>' # big-endian
+ 
+  data = np.fromfile(file, endian + 'f')
+  shape = (height, width, 3) if color else (height, width)
+  return np.flipud(np.reshape(data, shape)), scale
+
+
+def save_pfm(fname, image, scale=1):
+  file = open(fname, 'w') 
+  color = None
+ 
+  if image.dtype.name != 'float32':
+    raise Exception('Image dtype must be float32.')
+ 
+  if len(image.shape) == 3 and image.shape[2] == 3: # color image
+    color = True
+  elif len(image.shape) == 2 or len(image.shape) == 3 and image.shape[2] == 1: # greyscale
+    color = False
+  else:
+    raise Exception('Image must have H x W x 3, H x W x 1 or H x W dimensions.')
+ 
+  file.write('PF\n' if color else 'Pf\n')
+  file.write('%d %d\n' % (image.shape[1], image.shape[0]))
+ 
+  endian = image.dtype.byteorder
+ 
+  if endian == '<' or endian == '=' and sys.byteorder == 'little':
+    scale = -scale
+ 
+  file.write('%f\n' % scale)
+ 
+  np.flipud(image).tofile(file)
 

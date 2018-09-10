@@ -11,22 +11,22 @@ from utils import *
 import cv2
 
 def generate_hdf5():
-    PARALLAX = 32
-    SHIFT_FACTOR = 4
-    PATCH_SIZE = 64
+    PARALLAX = 64
+    SHIFT_FACTOR = 1
+    PATCH_SIZE = 33
     STEPH = 0
     STEPW = PARALLAX * SHIFT_FACTOR
-    STRIDE = 64
+    STRIDE = 24
     SRCDIR = '../Data/dark_enh_mb2014/train/'
-    SRCDIR_EVAL = '../Data/dark_enh_mb2014/eval/'
+    SRCDIR_EVAL = '../Data/dark_enh_mb2014/eval2/'
     INTERPOLATION = cv2.INTER_CUBIC
     DATAAUG = 0
     LL_en = 0   # WARNING IMPORTANT!!!!!!
 
     fdatax  = sorted(glob.glob(SRCDIR + 'X_left/*.png'))
     fdatay  = sorted(glob.glob(SRCDIR + 'Y_left/*.png'))
-    numPicsX = len(fdatax)
-    numPicsY = len(fdatay)
+    numPicsX = 0 #len(fdatax)
+    numPicsY = 0 #len(fdatay)
 
     fdatax_eval = sorted(glob.glob(SRCDIR_EVAL + 'X_left/*.png'))
     fdatay_eval = sorted(glob.glob(SRCDIR_EVAL + 'Y_left/*.png'))
@@ -61,11 +61,11 @@ def generate_hdf5():
         numPatches = count
 
     if LL_en == 1:
-        FDATA = DSTDIR + ('data_lumchr_LL_da%d_p%d_s%d_par%d_tr%d.hdf5' 
-                       % (DATAAUG, PATCH_SIZE, STRIDE, PARALLAX, numPatches))
+        FDATA = DSTDIR + ('data_lumchr_LL_da%d_p%d_s%d_par%d_shft%d_tr%d.hdf5' 
+                       % (DATAAUG, PATCH_SIZE, STRIDE, PARALLAX,SHIFT_FACTOR, numPatches))
     else:
-        FDATA = DSTDIR + ('data_lumchr_LR_da%d_p%d_s%d_par%d_tr%d.hdf5' 
-                       % (DATAAUG, PATCH_SIZE, STRIDE, PARALLAX, numPatches))
+        FDATA = DSTDIR + ('data_e_only_lumchr_LR_da%d_p%d_s%d_par%d_shft%d_tr%d.hdf5' 
+                       % (DATAAUG, PATCH_SIZE, STRIDE, PARALLAX, SHIFT_FACTOR, numPatches))
 
 
     print("[*] Info ..")
